@@ -44,6 +44,7 @@ jobs:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          export PATH="$RUNNER_TEMP/git-cliff/bin:$PATH"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="$GITHUB_REF_NAME"
             if [[ -n "$DISPATCH_VERSION" && "$DISPATCH_VERSION" != "$version" ]]; then
