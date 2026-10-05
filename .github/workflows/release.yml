@@ -208,15 +208,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 5
-          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz.sha256' | wc -l)" -eq 5
+          fail() { echo "::error::$*"; exit 1; }
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 5 || fail "Expected five archives"
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz.sha256' | wc -l)" -eq 5 || fail "Expected five checksums"
           cd dist
           for checksum in *.tar.gz.sha256; do
             archive="${checksum%.sha256}"
-            test "$(wc -l < "$checksum")" -eq 1
-            grep -qE '^[0-9a-f]{64}  [A-Za-z0-9._-]+$' "$checksum"
-            test "$(cut -c67- "$checksum")" = "$archive"
-            sha256sum --check --strict "$checksum"
+            cat "$checksum"
+            test "$(wc -l < "$checksum")" -eq 1 || fail "Expected one line in $checksum"
+            grep -qE '^[0-9a-f]{64} [ *][A-Za-z0-9._-]+$' "$checksum" || fail "Invalid format in $checksum"
+            test "$(cut -c67- "$checksum")" = "$archive" || fail "Wrong filename in $checksum"
+            sha256sum --check --strict "$checksum" || fail "Checksum mismatch in $checksum"
           done
       - name: Add installation and license notes
         env:

@@ -127,7 +127,7 @@ release: check-release
 	cp -R "$(LICENSES)" "$$stage/share/licenses/splintr-go"; \
 	tar -czf "$(RELEASES)/$(ARCHIVE).tmp" -C "$$stage" lib include share; \
 	mv "$(RELEASES)/$(ARCHIVE).tmp" "$(RELEASES)/$(ARCHIVE)"; rm -rf "$$stage"; \
-	cd "$(RELEASES)"; $(CHECKSUM) "$(ARCHIVE)" >"$(ARCHIVE).sha256"
+	cd "$(RELEASES)"; $(CHECKSUM) -b "$(ARCHIVE)" >"$(ARCHIVE).sha256"
 
 # Reuse the integration tests in a separate module with no local native build.
 test-release: release
