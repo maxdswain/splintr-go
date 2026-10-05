@@ -2,8 +2,6 @@
 
 Download the archive and `.sha256` file matching your module version and platform from [Releases](https://github.com/maxdswain/splintr-go/releases). Prebuilt libraries need Go 1.26+ and a C compiler, not Rust.
 
-**No releases published yet.** `v0.1.0` below is illustrative; use `make build` or `make release` until a release is published.
-
 | Platform | Build baseline |
 | --- | --- |
 | Linux amd64 / arm64 | Ubuntu 24.04, glibc |
@@ -60,4 +58,17 @@ make test-release VERSION=v0.1.0  # rebuild, extract, run isolated consumer test
 
 Archives contain `lib/libsplintr_go.a`, `lib/native-static-libs.txt`, `include/splintr.h`, and `share/licenses/splintr-go/`. All bundled vocabularies are included. Explicit cross-target builds require matching `GOOS`, `GOARCH`, `TARGET` and installed toolchains.
 
-Pushing a reviewed `v*` tag builds five archives and creates a **draft** GitHub release. Manual workflow dispatch builds artifacts only. Review the collected licenses—especially Llama, Gemma and Kimi—before publishing. License collection alone does not establish compliance; preserve the bundle when redistributing.
+Pushes to `main` automatically release qualifying Conventional Commits using [git-cliff](https://git-cliff.org/):
+
+- The first release is `v0.1.0`.
+- `feat:` bumps the minor version; `fix:` and `perf:` bump the patch version.
+- `!` or a `BREAKING CHANGE:` footer bumps the major version, including from `0.x` to `1.0.0`.
+- Other commits do not trigger a release unless they declare a breaking change.
+
+The workflow generates release notes, tests all five platforms, and verifies archive checksums before creating the tag.
+It uploads the assets to a draft, then publishes it once every upload succeeds. A failed build creates no tag or release.
+Release runs are serialized to avoid competing version bumps. Rules and changelog formatting live in `cliff.toml`.
+
+Manually pushed `v*` tags also build and publish. Manual workflow dispatch builds artifacts only.
+Tags created by the workflow use `GITHUB_TOKEN`, so they do not trigger a second workflow; publishing runs in the same job.
+Review vocabulary license changes before merging to `main`, and preserve the license bundle when redistributing.
