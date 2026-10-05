@@ -1,0 +1,45 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Go and Rust
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # golangci-lint 2.14 requires Go 1.26 or newer; use the module baseline.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
+      - name: Check Rust with Clippy
+        run: cargo clippy --locked --manifest-path native/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Build native library for cgo analysis
+        run: |
+          make native
+          echo "CGO_LDFLAGS=$(cat build/native/cgo-ldflags.txt)" >> "$GITHUB_ENV"
+      - name: Lint Go with Revive
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=10m
+      - name: Check Go formatting
+        run: golangci-lint fmt --diff

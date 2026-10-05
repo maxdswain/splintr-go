@@ -1,0 +1,23 @@
+version: "2"
+
+run:
+  timeout: 10m
+  modules-download-mode: readonly
+  build-tags:
+    - bundled
+
+linters:
+  default: none
+  enable:
+    - revive
+  settings:
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: line-length-limit
+          arguments: [120]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

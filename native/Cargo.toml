@@ -1,0 +1,21 @@
+[package]
+name = "splintr-go"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+autotests = false # Unit tests are included from lib.rs.
+
+[lib]
+name = "splintr_go"
+crate-type = ["staticlib"]
+
+[features]
+# Bundled pretrained vocabularies are part of the normal binary distribution.
+# Use `--no-default-features` for a smaller source build that only supports
+# tokenizers supplied as JSON.
+default = ["vocabs"]
+vocabs = ["splintr/vocabs"]
+
+[dependencies]
+splintr = { version = "=0.21.0", default-features = false }

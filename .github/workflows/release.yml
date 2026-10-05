@@ -1,0 +1,216 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (v-prefixed); dispatch builds but never publishes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CGO_ENABLED: '1'
+
+jobs:
+  prepare:
+    name: Validate release version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        name: Resolve and validate version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+            if [[ -n "$DISPATCH_VERSION" && "$DISPATCH_VERSION" != "$version" ]]; then
+              echo "The requested version does not match tag $version" >&2
+              exit 1
+            fi
+            tag_commit="$(git rev-list -n 1 "$version")"
+            head_commit="$(git rev-parse HEAD)"
+            if [[ "$tag_commit" != "$head_commit" ]]; then
+              echo "Tag $version does not identify the checked-out commit" >&2
+              exit 1
+            fi
+          else
+            version="$DISPATCH_VERSION"
+          fi
+          [[ "$version" =~ ^v[0-9A-Za-z.-]+$ ]] || exit 1
+          make check-version VERSION="$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  package-unix:
+    name: Package ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      TARGET: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+          key: ${{ matrix.target }}
+
+      - name: Test native library and release archive
+        run: make test test-release
+      - name: Upload packaged release
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
+          path: |
+            build/release/splintr-go-${{ needs.prepare.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            build/release/splintr-go-${{ needs.prepare.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256
+
+  package-windows:
+    name: Package windows/amd64 (MinGW-w64)
+    needs: prepare
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+          key: x86_64-pc-windows-gnu
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            make jq tar coreutils findutils grep sed gzip
+            mingw-w64-x86_64-gcc
+
+      - name: Test and package with MinGW-w64
+        shell: msys2 {0}
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GOOS: windows
+          GOARCH: amd64
+          TARGET: x86_64-pc-windows-gnu
+          CC: x86_64-w64-mingw32-gcc
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+        run: |
+          set -euo pipefail
+          export PATH="/mingw64/bin:$PATH"
+          make test test-release
+      - name: Upload packaged release
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-amd64
+          if-no-files-found: error
+          path: |
+            build/release/splintr-go-${{ needs.prepare.outputs.version }}-windows-amd64.tar.gz
+            build/release/splintr-go-${{ needs.prepare.outputs.version }}-windows-amd64.tar.gz.sha256
+
+  publish:
+    name: Create draft GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, package-unix, package-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 5
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz.sha256' | wc -l)" -eq 5
+          cd dist
+          for checksum in *.tar.gz.sha256; do
+            archive="${checksum%.sha256}"
+            test "$(wc -l < "$checksum")" -eq 1
+            grep -qE '^[0-9a-f]{64}  [A-Za-z0-9._-]+$' "$checksum"
+            test "$(cut -c67- "$checksum")" = "$archive"
+            sha256sum --check --strict "$checksum"
+          done
+      - name: Write release review notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cat > release-notes.md <<EOF
+          Native libraries for ${VERSION}, including all bundled vocabularies.
+          Targets: Ubuntu 24.04 amd64/arm64, macOS 15 amd64/arm64, Windows amd64 MinGW-w64.
+          Verify the accompanying SHA-256 checksum before extraction.
+
+          Draft: review the included licenses (especially Gemma, Llama and Kimi)
+          before publishing. License collection does not ensure legal compliance.
+          EOF
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; refusing to replace or modify it." >&2
+            exit 1
+          fi
+          gh release create "$VERSION" \
+            --draft \
+            --verify-tag \
+            --title "splintr-go $VERSION" \
+            --notes-file release-notes.md \
+            dist/*

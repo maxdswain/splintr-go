@@ -1,0 +1,14 @@
+# pi agent state
+.pi/
+
+# Native build outputs
+/build/
+/native/target/
+
+# Go test/build outputs
+/coverage.out
+*.test
+
+# Editor and OS files
+.DS_Store
+*.swp
