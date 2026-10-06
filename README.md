@@ -7,9 +7,9 @@ Go bindings for [splintr](https://github.com/ml-rust/splintr) through cgo. Defau
 Requires Go 1.26+, a C compiler, `curl` and `tar`. On Linux or macOS, run these commands in your application's Go module:
 
 ```sh
-go get github.com/maxdswain/splintr-go@v0.1.0
-archive="splintr-go-v0.1.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
-curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.1.0/$archive"
+go get github.com/maxdswain/splintr-go@v0.2.0
+archive="splintr-go-v0.2.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
+curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.2.0/$archive"
 tar -xzf ".splintr-native/$archive" -C .splintr-native
 
 CGO_ENABLED=1 CGO_LDFLAGS="\"-L$PWD/.splintr-native/lib\" -lsplintr_go $(cat .splintr-native/lib/native-static-libs.txt)" go build -a ./...
@@ -50,18 +50,22 @@ func main() {
 	fmt.Println(ids)
 	fmt.Println(text) // Hello, world!
 
-	// Encode multiple texts, one call per text.
-	texts := []string{"Hello, world!", "How are you?"}
-	batch := make([][]uint32, len(texts))
-	for i, text := range texts {
-		batch[i], err = tok.Encode(text)
-		if err != nil {
-			log.Fatal(err)
-		}
+	// Batch encode and decode, parallelized natively for larger inputs.
+	batch, err := tok.EncodeBatch([]string{"Hello, world!", "How are you?"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	texts, err := tok.DecodeBatch(batch)
+	if err != nil {
+		log.Fatal(err)
 	}
 	fmt.Println(batch)
+	fmt.Println(texts)
 }
 ```
+
+Batch results preserve input order and follow the same special-token behavior as `Encode` and `Decode`.
+An empty batch returns an empty slice; an error returns no partial results.
 
 ### Hugging Face tokenizer.json
 

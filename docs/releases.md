@@ -13,7 +13,7 @@ Download the archive and `.sha256` file matching your module version and platfor
 From your application module, after downloading both files:
 
 ```sh
-version=v0.1.0
+version=v0.2.0
 archive="splintr-go-$version-$(go env GOOS)-$(go env GOARCH).tar.gz"
 sha256sum -c "$archive.sha256" # macOS: shasum -a 256 -c "$archive.sha256"
 mkdir -p splintr-native
@@ -32,7 +32,7 @@ Stop if verification fails. Checksums detect corruption, not publisher identity;
 Put MinGW-w64 GCC on `PATH`, download the Windows archive and checksum, then:
 
 ```powershell
-$version = 'v0.1.0'
+$version = 'v0.2.0'
 $archive = "splintr-go-$version-windows-amd64.tar.gz"
 $expected = (Get-Content "$archive.sha256").Split(' ')[0]
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
@@ -52,8 +52,8 @@ Keep these environment settings for subsequent builds. The supplied flags preser
 ## Build and publish
 
 ```sh
-make release VERSION=v0.1.0       # build/release/*.tar.gz and checksums
-make test-release VERSION=v0.1.0  # rebuild, extract, run isolated consumer tests
+make release VERSION=v0.2.0       # build/release/*.tar.gz and checksums
+make test-release VERSION=v0.2.0  # rebuild, extract, run isolated consumer tests
 ```
 
 Archives contain `lib/libsplintr_go.a`, `lib/native-static-libs.txt`, `include/splintr.h`, and `share/licenses/splintr-go/`. All bundled vocabularies are included. Explicit cross-target builds require matching `GOOS`, `GOARCH`, `TARGET` and installed toolchains.

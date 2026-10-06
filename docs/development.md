@@ -9,7 +9,7 @@ make fmt                  # rustfmt and Go formatters
 make fmt-check lint       # rustfmt, Clippy and Revive (golangci-lint v2)
 make licenses             # dependency notices in build/licenses
 make install PREFIX="$HOME/.local"
-make test-release VERSION=v0.1.0
+make test-release VERSION=v0.2.0
 ```
 
 `make install` puts the archive and native linker flags in `PREFIX/lib`, the header in `PREFIX/include`, and notices in `PREFIX/share/licenses/splintr-go`. `DESTDIR` supports staged installation. See [consumer linker setup](releases.md).
@@ -25,6 +25,10 @@ make test NO_DEFAULT_FEATURES=1
 make build NO_DEFAULT_FEATURES=1 FEATURES=splintr/vocab-qwen
 ```
 
+Native batch processing uses splintr's Rayon support in both bundled and lean builds.
+Splintr keeps small batches sequential and schedules larger batches on its shared Rayon thread pool.
+Rebuild the native library after updating the bindings; the `v0.1.0` archive does not export batch functions.
+
 Use the same feature settings when building, testing and installing. Releases always bundle every vocabulary. Full bundles increase binary size and carry additional license terms.
 
 Set `GOOS`, `GOARCH` and `TARGET` for cross-compilation, with matching Rust and C toolchains. For example, Linux arm64 uses `TARGET=aarch64-unknown-linux-gnu`.
@@ -35,7 +39,7 @@ Set `GOOS`, `GOARCH` and `TARGET` for cross-compilation, with matching Rust and 
 | --- | --- |
 | `splintr.go` | Public Go package |
 | `tests/`, `tests/test_data/` | Go integration tests and fixtures |
-| `native/src/lib.rs`, `native/tests/unit.rs` | Rust C ABI and unit tests |
+| `native/src/lib.rs`, `native/tests/` | Rust C ABI and unit tests |
 | `native/include/splintr.h` | C interface and ownership rules |
 | `Makefile`, `.github/workflows/` | Build, test and release tasks |
 | `build/`, `native/target/` | Ignored build output |

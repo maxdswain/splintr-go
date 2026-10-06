@@ -261,6 +261,129 @@ func (t *Tokenizer) DecodeWithSpecialMode(ids []uint32, mode DecodeSpecialMode) 
 	return string(unsafe.Slice((*byte)(unsafe.Pointer(out.data)), int(out.len))), nil
 }
 
+// EncodeBatch encodes texts in input order using splintr's native batch processing.
+// It has the same special-token and post-processing behavior as Encode. Empty
+// batches return an empty slice; any error returns nil rather than partial results.
+func (t *Tokenizer) EncodeBatch(texts []string) ([][]uint32, error) {
+	state, ptr, err := t.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock(state)
+
+	lengths := make([]C.size_t, len(texts))
+	total := 0
+	for i, text := range texts {
+		if len(text) > maxInt()-total {
+			return nil, &Error{Code: CodeInvalidArgument, Message: "batch text length is too large"}
+		}
+		lengths[i] = C.size_t(len(text))
+		total += len(text)
+	}
+	input := make([]byte, 0, total)
+	for _, text := range texts {
+		input = append(input, text...)
+	}
+	var out C.SplintrIdsBatch
+	var nativeErr *C.SplintrError
+	status := C.splintr_encode_batch(
+		ptr, bytePtr(input), C.size_t(len(input)),
+		unsafe.SliceData(lengths), C.size_t(len(lengths)), &out, &nativeErr,
+	)
+	runtime.KeepAlive(input)
+	runtime.KeepAlive(lengths)
+	if err := nativeError(status, nativeErr); err != nil {
+		return nil, err
+	}
+	defer C.splintr_ids_batch_free(out)
+	data, sizes, err := batchOutput[uint32](unsafe.Pointer(out.values.data), out.values.len, out.lengths, len(texts))
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint32, len(data))
+	copy(ids, data)
+	result := make([][]uint32, len(texts))
+	start := 0
+	for i, size := range sizes {
+		end := start + int(size)
+		result[i] = ids[start:end:end]
+		start = end
+	}
+	return result, nil
+}
+
+// DecodeBatch decodes token lists in input order using splintr's native batch
+// processing. Special tokens and unknown IDs behave as in Decode. Empty batches
+// return an empty slice; any error returns nil rather than partial results.
+func (t *Tokenizer) DecodeBatch(tokenLists [][]uint32) ([]string, error) {
+	state, ptr, err := t.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock(state)
+
+	lengths := make([]C.size_t, len(tokenLists))
+	total := 0
+	for i, ids := range tokenLists {
+		if len(ids) > maxInt()/4-total {
+			return nil, &Error{Code: CodeInvalidArgument, Message: "batch token count is too large"}
+		}
+		lengths[i] = C.size_t(len(ids))
+		total += len(ids)
+	}
+	input := make([]uint32, 0, total)
+	for _, ids := range tokenLists {
+		input = append(input, ids...)
+	}
+	var out C.SplintrBytesBatch
+	var nativeErr *C.SplintrError
+	status := C.splintr_decode_batch(
+		ptr, uint32Ptr(input), C.size_t(len(input)),
+		unsafe.SliceData(lengths), C.size_t(len(lengths)), &out, &nativeErr,
+	)
+	runtime.KeepAlive(input)
+	runtime.KeepAlive(lengths)
+	if err := nativeError(status, nativeErr); err != nil {
+		return nil, err
+	}
+	defer C.splintr_bytes_batch_free(out)
+	data, sizes, err := batchOutput[byte](unsafe.Pointer(out.values.data), out.values.len, out.lengths, len(tokenLists))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(tokenLists))
+	start := 0
+	for i, size := range sizes {
+		end := start + int(size)
+		result[i] = string(data[start:end])
+		start = end
+	}
+	return result, nil
+}
+
+// batchOutput validates the borrowed native buffers before constructing slices.
+func batchOutput[T byte | uint32](
+	data unsafe.Pointer, size C.size_t, lengths C.SplintrLengths, count int,
+) ([]T, []C.size_t, error) {
+	var zero T
+	if lengths.len != C.size_t(count) || (count > 0 && lengths.data == nil) ||
+		uint64(size) > uint64(maxInt())/uint64(unsafe.Sizeof(zero)) || (size > 0 && data == nil) {
+		return nil, nil, &Error{Code: CodePanic, Message: "native batch returned invalid buffers"}
+	}
+	sizes := unsafe.Slice(lengths.data, count)
+	remaining := uint64(size)
+	for _, length := range sizes {
+		if uint64(length) > remaining {
+			return nil, nil, &Error{Code: CodePanic, Message: "native batch returned an invalid item length"}
+		}
+		remaining -= uint64(length)
+	}
+	if remaining != 0 {
+		return nil, nil, &Error{Code: CodePanic, Message: "native batch lengths do not match its data"}
+	}
+	return unsafe.Slice((*T)(data), int(size)), sizes, nil
+}
+
 // VocabSize returns the number of entries in the tokenizer vocabulary.
 func (t *Tokenizer) VocabSize() (int, error) {
 	state, ptr, err := t.lock()

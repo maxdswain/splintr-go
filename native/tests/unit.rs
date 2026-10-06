@@ -1,5 +1,7 @@
 use super::*;
 
+mod batch;
+
 const WORDPIECE: &[u8] = br###"{
   "version":"1.0",
   "added_tokens":[

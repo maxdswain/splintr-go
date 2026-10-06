@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Panic-contained C ABI. Ownership and pointer rules: `../include/splintr.h`.
+//!
+//! Inputs must stay valid for each call. Outputs are exclusive writable storage,
+//! disjoint from all inputs, handles, errors and other outputs. Free functions
+//! require the original Rust allocation, transferred exactly once.
 #![allow(clippy::missing_safety_doc)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use splintr::{AnyTokenizer, SpecialDecode, SpecialMode, Tokenize};
 use std::any::Any;
@@ -33,6 +38,25 @@ pub struct SplintrIds {
     pub data: *mut u32,
     pub len: usize,
     pub capacity: usize,
+}
+
+#[repr(C)]
+pub struct SplintrLengths {
+    pub data: *mut usize,
+    pub len: usize,
+    pub capacity: usize,
+}
+
+#[repr(C)]
+pub struct SplintrIdsBatch {
+    pub values: SplintrIds,
+    pub lengths: SplintrLengths,
+}
+
+#[repr(C)]
+pub struct SplintrBytesBatch {
+    pub values: SplintrBytes,
+    pub lengths: SplintrLengths,
 }
 
 /// Opaque outside this crate. The C declaration intentionally exposes no fields.
@@ -89,13 +113,15 @@ unsafe fn set_error(out_error: *mut *mut SplintrError, message: String) {
 }
 
 /// Validates and initializes a required output before any later failure.
-unsafe fn init_output<T>(output: *mut T, initial: T, null_message: &'static str) -> Result<(), AbiError> {
+// ABI outputs may be uninitialized and must not alias any other argument.
+unsafe fn init_output<'a, T>(output: *mut T, initial: T, null_message: &'static str) -> Result<&'a mut T, AbiError> {
     if output.is_null() {
         return Err(AbiError::invalid(null_message));
     }
     // SAFETY: each ABI function requires its non-null outputs to be writable.
     unsafe { ptr::write(output, initial) };
-    Ok(())
+    // SAFETY: the slot was initialized above and is exclusively owned for this call.
+    Ok(unsafe { &mut *output })
 }
 
 /// Runs an ABI operation, translating both ordinary errors and Rust panics.
@@ -123,26 +149,29 @@ where
     }
 }
 
-unsafe fn input_bytes<'a>(data: *const u8, len: usize, name: &str, allow_empty: bool) -> Result<&'a [u8], AbiError> {
-    if len > isize::MAX as usize {
-        return Err(AbiError::invalid(format!("{name} length is too large")));
+// Caller guarantees aligned, readable elements that remain unchanged for the borrow.
+unsafe fn input_slice<'a, T>(data: *const T, len: usize, name: &str, size_name: &str) -> Result<&'a [T], AbiError> {
+    if len > (isize::MAX as usize) / std::mem::size_of::<T>() {
+        return Err(AbiError::invalid(format!("{size_name} is too large")));
     }
     if len == 0 {
-        if !allow_empty {
-            return Err(AbiError::invalid(format!("{name} must not be empty")));
-        }
         return Ok(&[]);
     }
     if data.is_null() {
         return Err(AbiError::invalid(format!("{name} is NULL but its length is non-zero")));
     }
-    // SAFETY: the caller promises `len` readable bytes when data is non-null.
+    // SAFETY: checked byte extent; caller guarantees alignment and readable storage.
     Ok(unsafe { slice::from_raw_parts(data, len) })
 }
 
-unsafe fn input_str<'a>(data: *const u8, len: usize, name: &str, allow_empty: bool) -> Result<&'a str, AbiError> {
-    // SAFETY: forwards the same caller-owned input region.
-    let bytes = unsafe { input_bytes(data, len, name, allow_empty)? };
+fn nonempty<'a>(bytes: &'a [u8], name: &str) -> Result<&'a [u8], AbiError> {
+    if bytes.is_empty() {
+        return Err(AbiError::invalid(format!("{name} must not be empty")));
+    }
+    Ok(bytes)
+}
+
+fn utf8<'a>(bytes: &'a [u8], name: &str) -> Result<&'a str, AbiError> {
     str::from_utf8(bytes).map_err(|error| AbiError::utf8(format!("{name} is not UTF-8: {error}")))
 }
 
@@ -165,6 +194,65 @@ fn into_ids(value: Vec<u32>) -> SplintrIds {
     SplintrIds { data, len, capacity }
 }
 
+fn into_lengths(value: Vec<usize>) -> SplintrLengths {
+    let (data, len, capacity) = vec_parts(value);
+    SplintrLengths { data, len, capacity }
+}
+
+fn empty_ids_batch() -> SplintrIdsBatch {
+    SplintrIdsBatch {
+        values: into_ids(Vec::new()),
+        lengths: into_lengths(Vec::new()),
+    }
+}
+
+fn empty_bytes_batch() -> SplintrBytesBatch {
+    SplintrBytesBatch {
+        values: into_bytes(Vec::new()),
+        lengths: into_lengths(Vec::new()),
+    }
+}
+
+/// Check every partition before borrowing the payload (and before touching any element).
+fn validate_partitions(lengths: &[usize], data_len: usize) -> Result<(), AbiError> {
+    let mut total = 0usize;
+    for &len in lengths {
+        total = total
+            .checked_add(len)
+            .ok_or_else(|| AbiError::invalid("partition lengths overflow"))?;
+        if total > data_len {
+            return Err(AbiError::invalid("partition lengths exceed data_len"));
+        }
+    }
+    if total != data_len {
+        return Err(AbiError::invalid("partition lengths do not sum to data_len"));
+    }
+    Ok(())
+}
+
+fn flatten<T, U>(items: Vec<T>, payload: impl Fn(T) -> U) -> Result<(Vec<U::Item>, Vec<usize>), AbiError>
+where
+    U: IntoIterator,
+    U::IntoIter: ExactSizeIterator,
+{
+    let mut values = Vec::new();
+    let mut lengths = Vec::with_capacity(items.len());
+    for item in items {
+        let iter = payload(item).into_iter();
+        let len = iter.len();
+        let total = values
+            .len()
+            .checked_add(len)
+            .ok_or_else(|| AbiError::invalid("batch output overflow"))?;
+        if total > (isize::MAX as usize) / std::mem::size_of::<U::Item>() {
+            return Err(AbiError::invalid("batch output is too large"));
+        }
+        values.extend(iter);
+        lengths.push(len);
+    }
+    Ok((values, lengths))
+}
+
 unsafe fn tokenizer_ref<'a>(tokenizer: *const SplintrTokenizer) -> Result<&'a AnyTokenizer, AbiError> {
     if tokenizer.is_null() {
         return Err(AbiError::invalid("tokenizer is NULL"));
@@ -185,16 +273,16 @@ pub unsafe extern "C" fn splintr_tokenizer_from_json(
     out_tokenizer: *mut *mut SplintrTokenizer,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    // SAFETY: `ffi` implements the common output/error contract.
-    unsafe {
-        ffi(out_error, || {
-            init_output(out_tokenizer, ptr::null_mut(), "out_tokenizer is NULL")?;
-            let bytes = input_bytes(json, json_len, "json", false)?;
-            let tokenizer = splintr::from_json_bytes(bytes).map_err(AbiError::tokenizer)?;
-            ptr::write(out_tokenizer, Box::into_raw(Box::new(SplintrTokenizer(tokenizer))));
-            Ok(())
-        })
-    }
+    let operation = || {
+        // SAFETY: output and input regions obey the ABI contract.
+        let output = unsafe { init_output(out_tokenizer, ptr::null_mut(), "out_tokenizer is NULL")? };
+        let bytes = unsafe { input_slice(json, json_len, "json", "json length")? };
+        let tokenizer = splintr::from_json_bytes(nonempty(bytes, "json")?).map_err(AbiError::tokenizer)?;
+        *output = Box::into_raw(Box::new(SplintrTokenizer(tokenizer)));
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -204,15 +292,17 @@ pub unsafe extern "C" fn splintr_tokenizer_from_pretrained(
     out_tokenizer: *mut *mut SplintrTokenizer,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            init_output(out_tokenizer, ptr::null_mut(), "out_tokenizer is NULL")?;
-            let name = input_str(name, name_len, "pretrained name", false)?;
-            let tokenizer = splintr::from_pretrained(name).map_err(AbiError::tokenizer)?;
-            ptr::write(out_tokenizer, Box::into_raw(Box::new(SplintrTokenizer(tokenizer))));
-            Ok(())
-        })
-    }
+    let operation = || {
+        // SAFETY: output and input regions obey the ABI contract.
+        let output = unsafe { init_output(out_tokenizer, ptr::null_mut(), "out_tokenizer is NULL")? };
+        let bytes = unsafe { input_slice(name, name_len, "pretrained name", "pretrained name length")? };
+        let name = utf8(nonempty(bytes, "pretrained name")?, "pretrained name")?;
+        let tokenizer = splintr::from_pretrained(name).map_err(AbiError::tokenizer)?;
+        *output = Box::into_raw(Box::new(SplintrTokenizer(tokenizer)));
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -235,21 +325,23 @@ pub unsafe extern "C" fn splintr_encode_with_special_mode(
     out_ids: *mut SplintrIds,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            init_output(out_ids, into_ids(Vec::new()), "out_ids is NULL")?;
-            let tokenizer = tokenizer_ref(tokenizer)?;
-            let text = input_str(text, text_len, "text", true)?;
-            let mode = match mode {
-                SPECIAL_ORDINARY => SpecialMode::Ordinary,
-                SPECIAL_ALL => SpecialMode::All,
-                _ => return Err(AbiError::invalid("unknown encode special mode")),
-            };
-            let ids = tokenizer.encode_with(text, &mode).map_err(AbiError::tokenizer)?;
-            ptr::write(out_ids, into_ids(ids));
-            Ok(())
-        })
-    }
+    let operation = || {
+        // SAFETY: output, handle and input obey the ABI contract.
+        let output = unsafe { init_output(out_ids, into_ids(Vec::new()), "out_ids is NULL")? };
+        let tokenizer = unsafe { tokenizer_ref(tokenizer)? };
+        let bytes = unsafe { input_slice(text, text_len, "text", "text length")? };
+        let text = utf8(bytes, "text")?;
+        let mode = match mode {
+            SPECIAL_ORDINARY => SpecialMode::Ordinary,
+            SPECIAL_ALL => SpecialMode::All,
+            _ => return Err(AbiError::invalid("unknown encode special mode")),
+        };
+        let ids = tokenizer.encode_with(text, &mode).map_err(AbiError::tokenizer)?;
+        *output = into_ids(ids);
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -272,31 +364,97 @@ pub unsafe extern "C" fn splintr_decode_with_special_mode(
     out_text: *mut SplintrBytes,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            init_output(out_text, into_bytes(Vec::new()), "out_text is NULL")?;
-            let tokenizer = tokenizer_ref(tokenizer)?;
-            let ids = if ids_len == 0 {
-                &[]
-            } else {
-                if ids_len > (isize::MAX as usize) / std::mem::size_of::<u32>() {
-                    return Err(AbiError::invalid("ids_len is too large"));
-                }
-                if ids.is_null() {
-                    return Err(AbiError::invalid("ids is NULL but ids_len is non-zero"));
-                }
-                slice::from_raw_parts(ids, ids_len)
-            };
-            let mode = match mode {
-                DECODE_SKIP => SpecialDecode::Skip,
-                DECODE_RENDER => SpecialDecode::Render,
-                _ => return Err(AbiError::invalid("unknown decode special mode")),
-            };
-            let text = tokenizer.decode_with(ids, mode).map_err(AbiError::tokenizer)?;
-            ptr::write(out_text, into_bytes(text.into_bytes()));
-            Ok(())
-        })
-    }
+    let operation = || {
+        // SAFETY: output, handle and input obey the ABI contract.
+        let output = unsafe { init_output(out_text, into_bytes(Vec::new()), "out_text is NULL")? };
+        let tokenizer = unsafe { tokenizer_ref(tokenizer)? };
+        let ids = unsafe { input_slice(ids, ids_len, "ids", "ids_len")? };
+        let mode = match mode {
+            DECODE_SKIP => SpecialDecode::Skip,
+            DECODE_RENDER => SpecialDecode::Render,
+            _ => return Err(AbiError::invalid("unknown decode special mode")),
+        };
+        let text = tokenizer.decode_with(ids, mode).map_err(AbiError::tokenizer)?;
+        *output = into_bytes(text.into_bytes());
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_encode_batch(
+    tokenizer: *const SplintrTokenizer,
+    data: *const u8,
+    data_len: usize,
+    lengths: *const usize,
+    count: usize,
+    out: *mut SplintrIdsBatch,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output, handle and input regions obey the ABI contract.
+        let output = unsafe { init_output(out, empty_ids_batch(), "out is NULL")? };
+        let tokenizer = unsafe { tokenizer_ref(tokenizer)? };
+        if data_len > isize::MAX as usize {
+            return Err(AbiError::invalid("data_len is too large"));
+        }
+        let lengths = unsafe { input_slice(lengths, count, "lengths", "count")? };
+        validate_partitions(lengths, data_len)?;
+        let data = unsafe { input_slice(data, data_len, "data", "data_len")? };
+        let mut texts = Vec::with_capacity(count);
+        let mut offset = 0;
+        for &len in lengths {
+            texts.push(utf8(&data[offset..offset + len], "batch item")?);
+            offset += len;
+        }
+        let (values, lengths) = flatten(tokenizer.encode_batch(&texts), |ids| ids)?;
+        *output = SplintrIdsBatch {
+            values: into_ids(values),
+            lengths: into_lengths(lengths),
+        };
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_decode_batch(
+    tokenizer: *const SplintrTokenizer,
+    data: *const u32,
+    data_len: usize,
+    lengths: *const usize,
+    count: usize,
+    out: *mut SplintrBytesBatch,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output, handle and input regions obey the ABI contract.
+        let output = unsafe { init_output(out, empty_bytes_batch(), "out is NULL")? };
+        let tokenizer = unsafe { tokenizer_ref(tokenizer)? };
+        if data_len > (isize::MAX as usize) / std::mem::size_of::<u32>() {
+            return Err(AbiError::invalid("data_len is too large"));
+        }
+        let lengths = unsafe { input_slice(lengths, count, "lengths", "count")? };
+        validate_partitions(lengths, data_len)?;
+        let data = unsafe { input_slice(data, data_len, "data", "data_len")? };
+        let mut lists = Vec::with_capacity(count);
+        let mut offset = 0;
+        for &len in lengths {
+            lists.push(data[offset..offset + len].to_vec());
+            offset += len;
+        }
+        let decoded = tokenizer.decode_batch(&lists).map_err(AbiError::tokenizer)?;
+        let (values, lengths) = flatten(decoded, String::into_bytes)?;
+        *output = SplintrBytesBatch {
+            values: into_bytes(values),
+            lengths: into_lengths(lengths),
+        };
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -305,13 +463,14 @@ pub unsafe extern "C" fn splintr_tokenizer_vocab_size(
     out_size: *mut usize,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            init_output(out_size, 0, "out_size is NULL")?;
-            ptr::write(out_size, tokenizer_ref(tokenizer)?.vocab_size());
-            Ok(())
-        })
-    }
+    let operation = || {
+        // SAFETY: output and handle obey the ABI contract.
+        let output = unsafe { init_output(out_size, 0, "out_size is NULL")? };
+        *output = unsafe { tokenizer_ref(tokenizer)? }.vocab_size();
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -320,20 +479,20 @@ pub unsafe extern "C" fn splintr_tokenizer_family(
     out_family: *mut i32,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            init_output(out_family, 0, "out_family is NULL")?;
-            let family = match tokenizer_ref(tokenizer)?.family() {
-                "BPE" => 1,
-                "Unigram" => 2,
-                "WordPiece" => 3,
-                "Spm" => 4,
-                _ => 0,
-            };
-            ptr::write(out_family, family);
-            Ok(())
-        })
-    }
+    let operation = || {
+        // SAFETY: output and handle obey the ABI contract.
+        let output = unsafe { init_output(out_family, 0, "out_family is NULL")? };
+        *output = match unsafe { tokenizer_ref(tokenizer)? }.family() {
+            "BPE" => 1,
+            "Unigram" => 2,
+            "WordPiece" => 3,
+            "Spm" => 4,
+            _ => 0,
+        };
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -343,20 +502,21 @@ pub unsafe extern "C" fn splintr_tokenizer_eos_id(
     out_id: *mut u32,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            if out_found.is_null() || out_id.is_null() {
-                return Err(AbiError::invalid("EOS output is NULL"));
-            }
-            ptr::write(out_found, 0);
-            ptr::write(out_id, 0);
-            if let Some(id) = tokenizer_ref(tokenizer)?.eos_token_id() {
-                ptr::write(out_found, 1);
-                ptr::write(out_id, id);
-            }
-            Ok(())
-        })
-    }
+    let operation = || {
+        if out_found.is_null() || out_id.is_null() {
+            return Err(AbiError::invalid("EOS output is NULL"));
+        }
+        // SAFETY: distinct writable outputs and valid handle are guaranteed by the caller.
+        let found = unsafe { init_output(out_found, 0, "EOS output is NULL")? };
+        let output = unsafe { init_output(out_id, 0, "EOS output is NULL")? };
+        if let Some(id) = unsafe { tokenizer_ref(tokenizer)? }.eos_token_id() {
+            *found = 1;
+            *output = id;
+        }
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -368,22 +528,24 @@ pub unsafe extern "C" fn splintr_tokenizer_special_token_id(
     out_id: *mut u32,
     out_error: *mut *mut SplintrError,
 ) -> i32 {
-    unsafe {
-        ffi(out_error, || {
-            if out_found.is_null() || out_id.is_null() {
-                return Err(AbiError::invalid("special-token output is NULL"));
-            }
-            ptr::write(out_found, 0);
-            ptr::write(out_id, 0);
-            let tokenizer = tokenizer_ref(tokenizer)?;
-            let token = input_str(token, token_len, "special token", false)?;
-            if let Some(id) = tokenizer.special_token_id(token) {
-                ptr::write(out_found, 1);
-                ptr::write(out_id, id);
-            }
-            Ok(())
-        })
-    }
+    let operation = || {
+        if out_found.is_null() || out_id.is_null() {
+            return Err(AbiError::invalid("special-token output is NULL"));
+        }
+        // SAFETY: distinct writable outputs, handle and input obey the ABI contract.
+        let found = unsafe { init_output(out_found, 0, "special-token output is NULL")? };
+        let output = unsafe { init_output(out_id, 0, "special-token output is NULL")? };
+        let tokenizer = unsafe { tokenizer_ref(tokenizer)? };
+        let bytes = unsafe { input_slice(token, token_len, "special token", "special token length")? };
+        let token = utf8(nonempty(bytes, "special token")?, "special token")?;
+        if let Some(id) = tokenizer.special_token_id(token) {
+            *found = 1;
+            *output = id;
+        }
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
 }
 
 #[no_mangle]
@@ -397,25 +559,52 @@ pub unsafe extern "C" fn splintr_tokenizer_free(tokenizer: *mut SplintrTokenizer
     }));
 }
 
+// Caller transfers the exact unmodified triple produced by vec_parts, or the NULL empty triple.
+unsafe fn reclaim<T>(data: *mut T, len: usize, capacity: usize) {
+    if !data.is_null() {
+        // SAFETY: caller transfers ownership of the original Vec allocation.
+        drop(unsafe { Vec::from_raw_parts(data, len, capacity) });
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn splintr_bytes_free(buffer: SplintrBytes) {
-    if buffer.data.is_null() {
-        return;
-    }
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: exact triple returned by `into_bytes`; caller must not modify it.
-        drop(unsafe { Vec::from_raw_parts(buffer.data, buffer.len, buffer.capacity) });
+        // SAFETY: exact triple returned by into_bytes.
+        unsafe { reclaim(buffer.data, buffer.len, buffer.capacity) };
     }));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn splintr_ids_free(buffer: SplintrIds) {
-    if buffer.data.is_null() {
-        return;
-    }
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: exact triple returned by `into_ids`; caller must not modify it.
-        drop(unsafe { Vec::from_raw_parts(buffer.data, buffer.len, buffer.capacity) });
+        // SAFETY: exact triple returned by into_ids.
+        unsafe { reclaim(buffer.data, buffer.len, buffer.capacity) };
+    }));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_ids_batch_free(buffer: SplintrIdsBatch) {
+    // Reclaim each field independently so a panic dropping one does not skip the other.
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: exact values triple returned by the batch operation.
+        unsafe { reclaim(buffer.values.data, buffer.values.len, buffer.values.capacity) };
+    }));
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: exact lengths triple returned by the batch operation.
+        unsafe { reclaim(buffer.lengths.data, buffer.lengths.len, buffer.lengths.capacity) };
+    }));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_bytes_batch_free(buffer: SplintrBytesBatch) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: exact values triple returned by the batch operation.
+        unsafe { reclaim(buffer.values.data, buffer.values.len, buffer.values.capacity) };
+    }));
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: exact lengths triple returned by the batch operation.
+        unsafe { reclaim(buffer.lengths.data, buffer.lengths.len, buffer.lengths.capacity) };
     }));
 }
 

@@ -54,6 +54,8 @@ func TestBundledCanonicalPretrained(t *testing.T) {
 			size, sizeErr := tok.VocabSize()
 			family, familyErr := tok.Family()
 			_, _, eosErr := tok.EOSTokenID()
+			batch, batchEncodeErr := tok.EncodeBatch([]string{input, input})
+			batchText, batchDecodeErr := tok.DecodeBatch(batch)
 			closeErr := tok.Close()
 
 			if encodeErr != nil {
@@ -78,6 +80,12 @@ func TestBundledCanonicalPretrained(t *testing.T) {
 			}
 			if eosErr != nil {
 				t.Fatalf("EOSTokenID: %v", eosErr)
+			}
+			if batchEncodeErr != nil || !reflect.DeepEqual(batch, [][]uint32{ids, ids}) {
+				t.Fatalf("EncodeBatch differs from single calls: %v, %v", batch, batchEncodeErr)
+			}
+			if batchDecodeErr != nil || !reflect.DeepEqual(batchText, []string{decoded, decoded}) {
+				t.Fatalf("DecodeBatch differs from single calls: %q, %v", batchText, batchDecodeErr)
 			}
 			if closeErr != nil {
 				t.Fatalf("Close: %v", closeErr)

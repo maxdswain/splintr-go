@@ -54,6 +54,22 @@ typedef struct SplintrIds {
     size_t capacity;
 } SplintrIds;
 
+typedef struct SplintrLengths {
+    size_t *data;
+    size_t len;
+    size_t capacity;
+} SplintrLengths;
+
+typedef struct SplintrIdsBatch {
+    SplintrIds values;
+    SplintrLengths lengths;
+} SplintrIdsBatch;
+
+typedef struct SplintrBytesBatch {
+    SplintrBytes values;
+    SplintrLengths lengths;
+} SplintrBytesBatch;
+
 /* Link/version probe. Returns 0x00010000 for ABI 0.1.0. */
 uint32_t splintr_go_version_0_1_0(void);
 
@@ -97,6 +113,27 @@ SplintrStatus splintr_decode_with_special_mode(
     SplintrDecodeSpecialMode mode,
     SplintrBytes *out_text, SplintrError **out_error);
 
+/*
+ * Batch inputs are contiguous concatenated payloads, partitioned by exactly
+ * count lengths whose sum must equal data_len. Encode validates UTF-8 per item;
+ * decode lengths count uint32_t IDs. (NULL, 0, NULL, 0) and empty items are
+ * valid. Outputs concatenate the results in input order; lengths records each
+ * result size (IDs for encode, UTF-8 bytes for decode). These use the normal
+ * encode and decode defaults; there are no batch special-mode variants.
+ * Free only the complete returned batch with its matching batch free function,
+ * never its individual fields. On failure all output fields are zeroed.
+ */
+SplintrStatus splintr_encode_batch(
+    const SplintrTokenizer *tokenizer,
+    const uint8_t *data, size_t data_len,
+    const size_t *lengths, size_t count,
+    SplintrIdsBatch *out, SplintrError **out_error);
+SplintrStatus splintr_decode_batch(
+    const SplintrTokenizer *tokenizer,
+    const uint32_t *data, size_t data_len,
+    const size_t *lengths, size_t count,
+    SplintrBytesBatch *out, SplintrError **out_error);
+
 SplintrStatus splintr_tokenizer_vocab_size(
     const SplintrTokenizer *tokenizer,
     size_t *out_size, SplintrError **out_error);
@@ -120,6 +157,8 @@ SplintrStatus splintr_tokenizer_special_token_id(
 void splintr_tokenizer_free(SplintrTokenizer *tokenizer);
 void splintr_bytes_free(SplintrBytes buffer);
 void splintr_ids_free(SplintrIds buffer);
+void splintr_ids_batch_free(SplintrIdsBatch buffer);
+void splintr_bytes_batch_free(SplintrBytesBatch buffer);
 
 /*
  * out_error is optional and cleared before each operation. On failure it
@@ -135,8 +174,9 @@ void splintr_error_free(SplintrError *error);
  * Contract:
  * - Inputs are length-delimited, not NUL-terminated, and live through the call.
  *   Nonzero lengths require valid input storage; text/name bytes must be UTF-8.
- * - Outputs must be writable and not alias other arguments. They may be
- *   uninitialized; free any previous contents before reusing an output slot.
+ * - Outputs (including out_error) must be exclusive writable storage, disjoint
+ *   from inputs, live handles/errors and every other output for the whole call.
+ *   They may be uninitialized; free previous contents before reusing a slot.
  * - Fallible operations with valid required outputs zero those outputs before
  *   further validation. The borrowed error-message accessor is an exception.
  * - Concurrent tokenizer calls are allowed; freeing must wait for all calls.
