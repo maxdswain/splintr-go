@@ -4,14 +4,18 @@ Go bindings for [splintr](https://github.com/ml-rust/splintr) through cgo. Defau
 
 ## Installation
 
-Requires Go 1.26+ and a C compiler (MinGW-w64 on Windows). Download and extract the matching native archive from [Releases](https://github.com/maxdswain/splintr-go/releases), then:
+Requires Go 1.26+, a C compiler, `curl` and `tar`. On Linux or macOS, run these commands in your application's Go module:
 
 ```sh
 go get github.com/maxdswain/splintr-go@v0.1.0
-SPLINTR_LIB=/path/to/extracted/lib
-export CGO_LDFLAGS="\"-L$SPLINTR_LIB\" -lsplintr_go $(cat "$SPLINTR_LIB/native-static-libs.txt")"
-CGO_ENABLED=1 go build -a ./...
+archive="splintr-go-v0.1.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
+curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.1.0/$archive"
+tar -xzf ".splintr-native/$archive" -C .splintr-native
+
+CGO_ENABLED=1 CGO_LDFLAGS="\"-L$PWD/.splintr-native/lib\" -lsplintr_go $(cat .splintr-native/lib/native-static-libs.txt)" go build -a ./...
 ```
+
+See [release instructions](docs/releases.md) for checksum verification and Windows setup.
 
 ## Quick Start
 
