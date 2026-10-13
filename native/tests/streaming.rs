@@ -304,27 +304,30 @@ fn special_mode_skip_and_render() {
 
 #[test]
 fn rejects_unstreamable_declared_pipeline() {
-    unsafe {
-        // Replace the declared decoder with an unsupported pipeline.
-        let json = str::from_utf8(BYTELEVEL).unwrap().replace(
-            "\"type\": \"ByteLevel\"},\n  \"model\"",
-            "\"type\": \"BPEDecoder\", \"suffix\": \"</w>\"},\n  \"model\"",
+    let fixture = str::from_utf8(BYTELEVEL).unwrap().replace("\r\n", "\n");
+    for newline in ["\n", "\r\n"] {
+        let source = fixture.replace('\n', newline);
+        let json = source.replace(
+            "\"decoder\": {\"type\": \"ByteLevel\"}",
+            "\"decoder\": {\"type\": \"BPEDecoder\", \"suffix\": \"</w>\"}",
         );
-        assert_ne!(json.as_bytes(), BYTELEVEL);
-        let mut tokenizer = ptr::null_mut();
-        assert_eq!(
-            splintr_tokenizer_from_json(json.as_ptr(), json.len(), &mut tokenizer, ptr::null_mut()),
-            SPLINTR_OK
-        );
-        let mut decoder = ptr::dangling_mut::<SplintrStreamingDecoder>();
-        let mut error = ptr::null_mut();
-        assert_eq!(
-            splintr_streaming_decoder_new(tokenizer, 0, &mut decoder, &mut error),
-            SPLINTR_ERROR_TOKENIZER
-        );
-        assert!(decoder.is_null());
-        assert!(!error.is_null());
-        splintr_error_free(error);
-        splintr_tokenizer_free(tokenizer);
+        assert_ne!(json, source, "replacement failed with {newline:?} line endings");
+        unsafe {
+            let mut tokenizer = ptr::null_mut();
+            assert_eq!(
+                splintr_tokenizer_from_json(json.as_ptr(), json.len(), &mut tokenizer, ptr::null_mut()),
+                SPLINTR_OK
+            );
+            let mut decoder = ptr::dangling_mut::<SplintrStreamingDecoder>();
+            let mut error = ptr::null_mut();
+            assert_eq!(
+                splintr_streaming_decoder_new(tokenizer, 0, &mut decoder, &mut error),
+                SPLINTR_ERROR_TOKENIZER
+            );
+            assert!(decoder.is_null());
+            assert!(!error.is_null());
+            splintr_error_free(error);
+            splintr_tokenizer_free(tokenizer);
+        }
     }
 }
