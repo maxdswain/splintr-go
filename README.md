@@ -7,9 +7,9 @@ Go bindings for [splintr](https://github.com/ml-rust/splintr) through cgo. Defau
 Requires Go 1.26+, a C compiler, `curl` and `tar`. On Linux or macOS, run these commands in your application's Go module:
 
 ```sh
-go get github.com/maxdswain/splintr-go@v0.2.0
-archive="splintr-go-v0.2.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
-curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.2.0/$archive"
+go get github.com/maxdswain/splintr-go@v0.3.0
+archive="splintr-go-v0.3.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
+curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.3.0/$archive"
 tar -xzf ".splintr-native/$archive" -C .splintr-native
 
 CGO_ENABLED=1 CGO_LDFLAGS="\"-L$PWD/.splintr-native/lib\" -lsplintr_go $(cat .splintr-native/lib/native-static-libs.txt)" go build -a ./...
@@ -66,6 +66,39 @@ func main() {
 
 Batch results preserve input order and follow the same special-token behavior as `Encode` and `Decode`.
 An empty batch returns an empty slice; an error returns no partial results.
+
+### Streaming decoding
+
+Using `tok` and `ids` from above:
+
+```go
+stream, err := tok.StreamingDecoder()
+if err != nil {
+	log.Fatal(err)
+}
+defer stream.Close()
+
+for _, id := range ids {
+	text, err := stream.AddToken(id)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(text)
+}
+tail, err := stream.Flush()
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Print(tail)
+```
+
+The decoder buffers split UTF-8 characters; `Flush` emits remaining text, replacing incomplete sequences with `�`.
+`Reset` starts a new sequence, while `HasPending` and `PendingBytes` inspect buffered text.
+Use `StreamingDecoderWithSpecialMode(DecodeRenderSpecial)` to render special tokens, or `AddTokenLossy` / `AddTokensLossy` to skip unknown IDs.
+
+Streams survive closing their tokenizer and serialize concurrent calls. `Close` discards pending text, so flush first.
+Unsupported decoder pipelines fail at construction; a strict add error retains any accepted prefix for a later flush or reset.
+Splintr has no streaming encoder; use `Encode` or `EncodeBatch` for complete text.
 
 ### Hugging Face tokenizer.json
 

@@ -10,6 +10,7 @@ extern "C" {
 
 /* Opaque, heap-owned objects. */
 typedef struct SplintrTokenizer SplintrTokenizer;
+typedef struct SplintrStreamingDecoder SplintrStreamingDecoder;
 typedef struct SplintrError SplintrError;
 
 typedef enum SplintrStatus {
@@ -114,6 +115,32 @@ SplintrStatus splintr_decode_with_special_mode(
     SplintrBytes *out_text, SplintrError **out_error);
 
 /*
+ * Streams outlive their tokenizer; unsupported pipelines return TOKENIZER.
+ * add_tokens accepts (NULL, 0). lossy=0 rejects unknown IDs (TOKENIZER), 1 skips
+ * them; other values return INVALID_ARGUMENT without mutation. Accepted prefixes
+ * remain buffered on unknown-ID errors. flush replaces incomplete UTF-8 with
+ * U+FFFD without resetting or closing. reset discards pending text and restarts;
+ * pending counts all buffered bytes. Free outputs with splintr_bytes_free.
+ * Serialize all calls per stream, including queries and free. Mutable operations
+ * require exclusive access; inputs must not overlap the decoder or its storage.
+ */
+SplintrStatus splintr_streaming_decoder_new(
+    const SplintrTokenizer *tokenizer, SplintrDecodeSpecialMode mode,
+    SplintrStreamingDecoder **out_decoder, SplintrError **out_error);
+SplintrStatus splintr_streaming_decoder_add_tokens(
+    SplintrStreamingDecoder *decoder, const uint32_t *ids, size_t ids_len,
+    uint8_t lossy, SplintrBytes *out_text, SplintrError **out_error);
+SplintrStatus splintr_streaming_decoder_flush(
+    SplintrStreamingDecoder *decoder, SplintrBytes *out_text, SplintrError **out_error);
+SplintrStatus splintr_streaming_decoder_reset(
+    SplintrStreamingDecoder *decoder, SplintrError **out_error);
+SplintrStatus splintr_streaming_decoder_has_pending(
+    const SplintrStreamingDecoder *decoder, uint8_t *out_pending, SplintrError **out_error);
+SplintrStatus splintr_streaming_decoder_pending_bytes(
+    const SplintrStreamingDecoder *decoder, size_t *out_bytes, SplintrError **out_error);
+void splintr_streaming_decoder_free(SplintrStreamingDecoder *decoder);
+
+/*
  * Batch inputs are contiguous concatenated payloads, partitioned by exactly
  * count lengths whose sum must equal data_len. Encode validates UTF-8 per item;
  * decode lengths count uint32_t IDs. (NULL, 0, NULL, 0) and empty items are
@@ -180,6 +207,7 @@ void splintr_error_free(SplintrError *error);
  * - Fallible operations with valid required outputs zero those outputs before
  *   further validation. The borrowed error-message accessor is an exception.
  * - Concurrent tokenizer calls are allowed; freeing must wait for all calls.
+ *   Stream calls (including free and queries) must be serialized per stream.
  *   Double-free, use-after-free and modifying owned buffer triples are invalid.
  * - Panics are caught and reported as PANIC. Errors are returned per call.
  */

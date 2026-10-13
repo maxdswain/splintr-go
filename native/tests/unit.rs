@@ -13,7 +13,7 @@ const WORDPIECE: &[u8] = br###"{
     "vocab":{"[UNK]":0,"[SEP]":1,"hello":2,"world":3,"token":4,"##izer":5}}
 }"###;
 
-unsafe fn load() -> *mut SplintrTokenizer {
+pub(super) unsafe fn load() -> *mut SplintrTokenizer {
     let mut tokenizer = ptr::null_mut();
     let mut error = ptr::null_mut();
     assert_eq!(

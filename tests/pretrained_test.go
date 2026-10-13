@@ -56,6 +56,20 @@ func TestBundledCanonicalPretrained(t *testing.T) {
 			_, _, eosErr := tok.EOSTokenID()
 			batch, batchEncodeErr := tok.EncodeBatch([]string{input, input})
 			batchText, batchDecodeErr := tok.DecodeBatch(batch)
+			stream, streamErr := tok.StreamingDecoder()
+			var streamed string
+			if streamErr == nil {
+				streamed = streamAll(t, stream, ids, 1)
+				if resetErr := stream.Reset(); resetErr != nil {
+					t.Fatalf("stream Reset: %v", resetErr)
+				}
+				if grouped := streamAll(t, stream, ids, 3); grouped != streamed {
+					t.Fatalf("grouped stream = %q, per-token = %q", grouped, streamed)
+				}
+				if closeStreamErr := stream.Close(); closeStreamErr != nil {
+					t.Fatalf("stream Close: %v", closeStreamErr)
+				}
+			}
 			closeErr := tok.Close()
 
 			if encodeErr != nil {
@@ -71,6 +85,9 @@ func TestBundledCanonicalPretrained(t *testing.T) {
 			// intentionally not asserted.
 			if decoded == "" {
 				t.Fatal("Decode returned empty text")
+			}
+			if streamErr != nil || streamed != decoded {
+				t.Fatalf("stream = %q, %v; Decode = %q", streamed, streamErr, decoded)
 			}
 			if sizeErr != nil || size <= 0 {
 				t.Fatalf("VocabSize = %d, %v", size, sizeErr)

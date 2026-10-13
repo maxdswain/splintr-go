@@ -8,7 +8,7 @@
 #![allow(clippy::missing_safety_doc)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use splintr::{AnyTokenizer, SpecialDecode, SpecialMode, Tokenize};
+use splintr::{AnyTokenizer, SpecialDecode, SpecialMode, StreamingDecoder, Tokenize};
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
@@ -61,6 +61,9 @@ pub struct SplintrBytesBatch {
 
 /// Opaque outside this crate. The C declaration intentionally exposes no fields.
 pub struct SplintrTokenizer(AnyTokenizer);
+
+/// Owned decoder, independent of its tokenizer.
+pub struct SplintrStreamingDecoder(StreamingDecoder);
 
 /// Opaque error whose message is exposed as borrowed length-delimited bytes.
 pub struct SplintrError {
@@ -261,6 +264,22 @@ unsafe fn tokenizer_ref<'a>(tokenizer: *const SplintrTokenizer) -> Result<&'a An
     Ok(&unsafe { &*tokenizer }.0)
 }
 
+unsafe fn decoder_mut<'a>(decoder: *mut SplintrStreamingDecoder) -> Result<&'a mut StreamingDecoder, AbiError> {
+    if decoder.is_null() {
+        return Err(AbiError::invalid("decoder is NULL"));
+    }
+    // SAFETY: caller guarantees exclusive access to the live handle.
+    Ok(&mut unsafe { &mut *decoder }.0)
+}
+
+unsafe fn decoder_ref<'a>(decoder: *const SplintrStreamingDecoder) -> Result<&'a StreamingDecoder, AbiError> {
+    if decoder.is_null() {
+        return Err(AbiError::invalid("decoder is NULL"));
+    }
+    // SAFETY: the handle is live; no mutation or free overlaps this call.
+    Ok(&unsafe { &*decoder }.0)
+}
+
 #[no_mangle]
 pub extern "C" fn splintr_go_version_0_1_0() -> u32 {
     0x0001_0000
@@ -380,6 +399,132 @@ pub unsafe extern "C" fn splintr_decode_with_special_mode(
     };
     // SAFETY: out_error is a writable ABI output when non-null.
     unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_new(
+    tokenizer: *const SplintrTokenizer,
+    mode: i32,
+    out_decoder: *mut *mut SplintrStreamingDecoder,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output and tokenizer handle obey the ABI contract.
+        let output = unsafe { init_output(out_decoder, ptr::null_mut(), "out_decoder is NULL")? };
+        let tokenizer = unsafe { tokenizer_ref(tokenizer)? };
+        let mode = match mode {
+            DECODE_SKIP => SpecialDecode::Skip,
+            DECODE_RENDER => SpecialDecode::Render,
+            _ => return Err(AbiError::invalid("unknown decode special mode")),
+        };
+        let decoder = tokenizer.streaming_decoder_with(mode).map_err(AbiError::tokenizer)?;
+        *output = Box::into_raw(Box::new(SplintrStreamingDecoder(decoder)));
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_add_tokens(
+    decoder: *mut SplintrStreamingDecoder,
+    ids: *const u32,
+    ids_len: usize,
+    lossy: u8,
+    out_text: *mut SplintrBytes,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output, handle and input regions obey the ABI contract.
+        let output = unsafe { init_output(out_text, into_bytes(Vec::new()), "out_text is NULL")? };
+        if lossy > 1 {
+            return Err(AbiError::invalid("lossy must be 0 or 1"));
+        }
+        let ids = unsafe { input_slice(ids, ids_len, "ids", "ids_len")? };
+        let decoder = unsafe { decoder_mut(decoder)? };
+        let text = if lossy == 1 {
+            decoder.add_tokens_lossy(ids)
+        } else {
+            decoder.add_tokens(ids).map_err(AbiError::tokenizer)?
+        };
+        *output = into_bytes(text.unwrap_or_default().into_bytes());
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_flush(
+    decoder: *mut SplintrStreamingDecoder,
+    out_text: *mut SplintrBytes,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output and exclusively held handle obey the ABI contract.
+        let output = unsafe { init_output(out_text, into_bytes(Vec::new()), "out_text is NULL")? };
+        *output = into_bytes(unsafe { decoder_mut(decoder)? }.flush().into_bytes());
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_reset(
+    decoder: *mut SplintrStreamingDecoder,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: caller grants exclusive access to the live handle.
+        unsafe { decoder_mut(decoder)? }.reset();
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_has_pending(
+    decoder: *const SplintrStreamingDecoder,
+    out_pending: *mut u8,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output and shared handle obey the ABI contract.
+        let output = unsafe { init_output(out_pending, 0, "out_pending is NULL")? };
+        *output = u8::from(unsafe { decoder_ref(decoder)? }.has_pending());
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_pending_bytes(
+    decoder: *const SplintrStreamingDecoder,
+    out_bytes: *mut usize,
+    out_error: *mut *mut SplintrError,
+) -> i32 {
+    let operation = || {
+        // SAFETY: output and shared handle obey the ABI contract.
+        let output = unsafe { init_output(out_bytes, 0, "out_bytes is NULL")? };
+        *output = unsafe { decoder_ref(decoder)? }.pending_bytes();
+        Ok(())
+    };
+    // SAFETY: out_error is a writable ABI output when non-null.
+    unsafe { ffi(out_error, operation) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn splintr_streaming_decoder_free(decoder: *mut SplintrStreamingDecoder) {
+    if decoder.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller transfers sole ownership; no calls remain in flight.
+        drop(unsafe { Box::from_raw(decoder) });
+    }));
 }
 
 #[no_mangle]
@@ -645,3 +790,7 @@ pub unsafe extern "C" fn splintr_error_free(error: *mut SplintrError) {
 #[cfg(test)]
 #[path = "../tests/unit.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/streaming.rs"]
+mod streaming_tests;

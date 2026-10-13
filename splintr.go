@@ -58,7 +58,7 @@ func (e *Error) Error() string {
 }
 
 // ErrClosed is returned when an operation is attempted on a closed, nil, or
-// zero-value Tokenizer.
+// zero-value Tokenizer or StreamingDecoder.
 var ErrClosed = errors.New("splintr: tokenizer is closed")
 
 // EncodeSpecialMode controls recognition of special-token spellings.
@@ -259,6 +259,209 @@ func (t *Tokenizer) DecodeWithSpecialMode(ids []uint32, mode DecodeSpecialMode) 
 		return "", &Error{Code: CodePanic, Message: "native decoder returned an invalid output buffer"}
 	}
 	return string(unsafe.Slice((*byte)(unsafe.Pointer(out.data)), int(out.len))), nil
+}
+
+type streamingDecoderState struct {
+	mu  sync.Mutex
+	ptr *C.SplintrStreamingDecoder
+}
+
+// StreamingDecoder incrementally decodes IDs. Calls are serialized; its zero value is closed.
+// Copies share one cursor and lifetime.
+type StreamingDecoder struct {
+	state *streamingDecoderState
+}
+
+// StreamingDecoder creates a decoder that skips specials and outlives its tokenizer.
+func (t *Tokenizer) StreamingDecoder() (*StreamingDecoder, error) {
+	return t.StreamingDecoderWithSpecialMode(DecodeSkipSpecial)
+}
+
+// StreamingDecoderWithSpecialMode sets special-token handling in a new decoder.
+// Unsupported pipelines return an error.
+func (t *Tokenizer) StreamingDecoderWithSpecialMode(mode DecodeSpecialMode) (*StreamingDecoder, error) {
+	state, ptr, err := t.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock(state)
+	// Avoid wrapping an invalid Go int into a valid C enum.
+	if mode != DecodeSkipSpecial && mode != DecodeRenderSpecial {
+		return nil, &Error{Code: CodeInvalidArgument, Message: "invalid decode special mode"}
+	}
+	var decoder *C.SplintrStreamingDecoder
+	var nativeErr *C.SplintrError
+	status := C.splintr_streaming_decoder_new(ptr, C.SplintrDecodeSpecialMode(mode), &decoder, &nativeErr)
+	if err := nativeError(status, nativeErr); err != nil {
+		if decoder != nil {
+			C.splintr_streaming_decoder_free(decoder)
+		}
+		return nil, err
+	}
+	if decoder == nil {
+		return nil, &Error{Code: CodePanic, Message: "native constructor returned a nil streaming decoder"}
+	}
+	stream := &streamingDecoderState{ptr: decoder}
+	runtime.SetFinalizer(stream, finalizeStreamingDecoder)
+	return &StreamingDecoder{state: stream}, nil
+}
+
+func finalizeStreamingDecoder(state *streamingDecoderState) {
+	state.mu.Lock()
+	ptr := state.ptr
+	state.ptr = nil
+	state.mu.Unlock()
+	if ptr != nil {
+		C.splintr_streaming_decoder_free(ptr)
+	}
+}
+
+func (d *StreamingDecoder) lock() (*streamingDecoderState, *C.SplintrStreamingDecoder, error) {
+	if d == nil || d.state == nil {
+		return nil, nil, ErrClosed
+	}
+	state := d.state
+	state.mu.Lock()
+	if state.ptr == nil {
+		state.mu.Unlock()
+		return nil, nil, ErrClosed
+	}
+	return state, state.ptr, nil
+}
+
+func unlockStreamingDecoder(state *streamingDecoderState) {
+	state.mu.Unlock()
+	runtime.KeepAlive(state)
+}
+
+// Close waits for active calls and discards pending text. It is idempotent.
+func (d *StreamingDecoder) Close() error {
+	if d == nil || d.state == nil {
+		return nil
+	}
+	state := d.state
+	state.mu.Lock()
+	ptr := state.ptr
+	state.ptr = nil
+	state.mu.Unlock()
+	if ptr != nil {
+		runtime.SetFinalizer(state, nil)
+		C.splintr_streaming_decoder_free(ptr)
+	}
+	runtime.KeepAlive(state)
+	return nil
+}
+
+// AddToken decodes one ID; unknown IDs return an error.
+func (d *StreamingDecoder) AddToken(id uint32) (string, error) {
+	return d.AddTokens([]uint32{id})
+}
+
+// AddTokens emits available text, possibly empty. Unknown IDs return an error;
+// any accepted prefix remains buffered.
+func (d *StreamingDecoder) AddTokens(ids []uint32) (string, error) {
+	return d.addTokens(ids, false)
+}
+
+// AddTokenLossy decodes one ID, skipping unknown IDs.
+func (d *StreamingDecoder) AddTokenLossy(id uint32) (string, error) {
+	return d.AddTokensLossy([]uint32{id})
+}
+
+// AddTokensLossy is AddTokens with unknown IDs skipped.
+func (d *StreamingDecoder) AddTokensLossy(ids []uint32) (string, error) {
+	return d.addTokens(ids, true)
+}
+
+func (d *StreamingDecoder) addTokens(ids []uint32, lossy bool) (string, error) {
+	state, ptr, err := d.lock()
+	if err != nil {
+		return "", err
+	}
+	defer unlockStreamingDecoder(state)
+	var out C.SplintrBytes
+	var nativeErr *C.SplintrError
+	var flag C.uint8_t
+	if lossy {
+		flag = 1
+	}
+	status := C.splintr_streaming_decoder_add_tokens(ptr, uint32Ptr(ids), C.size_t(len(ids)), flag, &out, &nativeErr)
+	runtime.KeepAlive(ids)
+	return streamingBytes(out, status, nativeErr)
+}
+
+// Flush drains buffered text, replacing incomplete UTF-8. It neither resets nor closes the decoder.
+func (d *StreamingDecoder) Flush() (string, error) {
+	state, ptr, err := d.lock()
+	if err != nil {
+		return "", err
+	}
+	defer unlockStreamingDecoder(state)
+	var out C.SplintrBytes
+	var nativeErr *C.SplintrError
+	status := C.splintr_streaming_decoder_flush(ptr, &out, &nativeErr)
+	return streamingBytes(out, status, nativeErr)
+}
+
+func streamingBytes(out C.SplintrBytes, status C.SplintrStatus, nativeErr *C.SplintrError) (string, error) {
+	defer C.splintr_bytes_free(out)
+	if err := nativeError(status, nativeErr); err != nil {
+		return "", err
+	}
+	if uint64(out.len) > uint64(maxInt()) || (out.len > 0 && out.data == nil) {
+		return "", &Error{Code: CodePanic, Message: "native streaming decoder returned an invalid output buffer"}
+	}
+	if out.len == 0 {
+		return "", nil
+	}
+	return string(unsafe.Slice((*byte)(unsafe.Pointer(out.data)), int(out.len))), nil
+}
+
+// Reset discards pending text and starts a new sequence.
+func (d *StreamingDecoder) Reset() error {
+	state, ptr, err := d.lock()
+	if err != nil {
+		return err
+	}
+	defer unlockStreamingDecoder(state)
+	var nativeErr *C.SplintrError
+	status := C.splintr_streaming_decoder_reset(ptr, &nativeErr)
+	return nativeError(status, nativeErr)
+}
+
+// HasPending reports whether any buffered text remains.
+func (d *StreamingDecoder) HasPending() (bool, error) {
+	state, ptr, err := d.lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlockStreamingDecoder(state)
+	var pending C.uint8_t
+	var nativeErr *C.SplintrError
+	status := C.splintr_streaming_decoder_has_pending(ptr, &pending, &nativeErr)
+	if err := nativeError(status, nativeErr); err != nil {
+		return false, err
+	}
+	return pending != 0, nil
+}
+
+// PendingBytes counts bytes awaiting emission, including post-processing buffers.
+func (d *StreamingDecoder) PendingBytes() (int, error) {
+	state, ptr, err := d.lock()
+	if err != nil {
+		return 0, err
+	}
+	defer unlockStreamingDecoder(state)
+	var count C.size_t
+	var nativeErr *C.SplintrError
+	status := C.splintr_streaming_decoder_pending_bytes(ptr, &count, &nativeErr)
+	if err := nativeError(status, nativeErr); err != nil {
+		return 0, err
+	}
+	if uint64(count) > uint64(maxInt()) {
+		return 0, &Error{Code: CodePanic, Message: "native pending byte count overflows int"}
+	}
+	return int(count), nil
 }
 
 // EncodeBatch encodes texts in input order using splintr's native batch processing.
