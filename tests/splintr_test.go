@@ -26,8 +26,8 @@ func loadWordPiece(t *testing.T) *splintr.Tokenizer {
 
 func requireCode(t *testing.T, err error, code splintr.ErrorCode) {
 	t.Helper()
-	var nativeErr *splintr.Error
-	if !errors.As(err, &nativeErr) {
+	nativeErr, ok := errors.AsType[*splintr.Error](err)
+	if !ok {
 		t.Fatalf("error %T (%v) is not *Error", err, err)
 	}
 	if nativeErr.Code != code {
