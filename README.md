@@ -7,9 +7,9 @@ Go bindings for [splintr](https://github.com/ml-rust/splintr) through cgo. Defau
 Requires Go 1.26+, a C compiler, `curl` and `tar`. On Linux or macOS, run these commands in your application's Go module:
 
 ```sh
-go get github.com/maxdswain/splintr-go@v0.3.0
-archive="splintr-go-v0.3.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
-curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.3.0/$archive"
+go get github.com/maxdswain/splintr-go@v0.4.0
+archive="splintr-go-v0.4.0-$(go env GOOS)-$(go env GOARCH).tar.gz"
+curl -fL --create-dirs -o ".splintr-native/$archive" "https://github.com/maxdswain/splintr-go/releases/download/v0.4.0/$archive"
 tar -xzf ".splintr-native/$archive" -C .splintr-native
 
 CGO_ENABLED=1 CGO_LDFLAGS="\"-L$PWD/.splintr-native/lib\" -lsplintr_go $(cat .splintr-native/lib/native-static-libs.txt)" go build -a ./...
@@ -132,6 +132,7 @@ make test
 make fmt-check lint # rustfmt, Clippy and Revive via golangci-lint v2
 ```
 
+- [API reference and examples](https://pkg.go.dev/github.com/maxdswain/splintr-go)
 - [Pretrained names and compatibility](docs/pretrained.md)
 - [Build options and layout](docs/development.md)
 - [Release packaging](docs/releases.md)

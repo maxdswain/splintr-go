@@ -135,13 +135,14 @@ test-release: release
 	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
 	mkdir -p "$$tmp/native library" "$$tmp/module/native" "$$tmp/consumer"; \
 	tar -xzf "$(ARCHIVE)" -C "$$tmp/native library"; \
-	cp "$(ROOT)/go.mod" "$(ROOT)/splintr.go" "$$tmp/module/"; \
+	cp "$(ROOT)/go.mod" "$(ROOT)"/*.go "$$tmp/module/"; \
 	cp -R "$(ROOT)/native/include" "$$tmp/module/native/"; \
 	cp -R "$(ROOT)/tests/." "$$tmp/consumer/"; \
 	printf 'module release-test\n\ngo 1.26.0\n\nrequire github.com/maxdswain/splintr-go v0.0.0\nreplace github.com/maxdswain/splintr-go => ../module\n' >"$$tmp/consumer/go.mod"; \
 	flags=$$(cat "$$tmp/native library/lib/native-static-libs.txt"); libdir="$$tmp/native library/lib"; \
 	if command -v cygpath >/dev/null; then libdir=$$(cygpath -m "$$libdir"); fi; \
-	cd "$$tmp/consumer"; CGO_ENABLED=1 CGO_LDFLAGS="\"-L$$libdir\" -lsplintr_go $$flags" go test -race -a -tags=bundled ./...
+	cd "$$tmp/consumer"; CGO_ENABLED=1 CGO_LDFLAGS="\"-L$$libdir\" -lsplintr_go $$flags" \
+		go test -race -a -tags=bundled github.com/maxdswain/splintr-go ./...
 
 clean:
 	cargo clean --manifest-path "$(MANIFEST)"

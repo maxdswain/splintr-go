@@ -9,7 +9,7 @@ make fmt                  # rustfmt and Go formatters
 make fmt-check lint       # rustfmt, Clippy and Revive (golangci-lint v2)
 make licenses             # dependency notices in build/licenses
 make install PREFIX="$HOME/.local"
-make test-release VERSION=v0.3.0
+make test-release VERSION=v0.4.0
 ```
 
 `make install` puts the archive and native linker flags in `PREFIX/lib`, the header in `PREFIX/include`, and notices in `PREFIX/share/licenses/splintr-go`. `DESTDIR` supports staged installation. See [consumer linker setup](releases.md).
@@ -54,11 +54,12 @@ Splintr 0.21.0 has no streaming encoder, so encoding remains whole-input or batc
 
 | Path | Purpose |
 | --- | --- |
-| `splintr.go` | Public Go package |
+| `splintr.go`, `doc.go` | Public Go API and package documentation |
+| `example_test.go` | Executable examples for pkg.go.dev |
 | `tests/`, `tests/test_data/` | Go integration tests and fixtures |
 | `native/src/lib.rs`, `native/tests/` | Rust C ABI and unit tests |
 | `native/include/splintr.h` | C interface and ownership rules |
 | `Makefile`, `.github/workflows/` | Build, test and release tasks |
 | `build/`, `native/target/` | Ignored build output |
 
-Native linker flags come from rustc, not a hardcoded platform list. Go builds use `-a` because its cache does not track static-archive changes. `test-release` runs the integration tests from a separate consumer module against an extracted archive.
+Native linker flags come from rustc, not a hardcoded platform list. Go builds use `-a` because its cache does not track static-archive changes. `test-release` runs the documentation examples and integration tests against an extracted archive.

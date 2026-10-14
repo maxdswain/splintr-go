@@ -1,4 +1,3 @@
-// Package splintr provides Go bindings to the Rust splintr tokenizer.
 package splintr
 
 /*
@@ -41,12 +40,13 @@ const (
 	CodePanic           = ErrorPanic
 )
 
-// Error is an error reported by the native splintr library.
+// Error describes a native failure. Use [errors.AsType] to inspect its Code.
 type Error struct {
-	Code    ErrorCode
-	Message string
+	Code    ErrorCode // Failure category.
+	Message string    // Native detail, without the "splintr:" prefix.
 }
 
+// Error formats the native message or error code.
 func (e *Error) Error() string {
 	if e == nil {
 		return "<nil>"
@@ -58,7 +58,7 @@ func (e *Error) Error() string {
 }
 
 // ErrClosed is returned when an operation is attempted on a closed, nil, or
-// zero-value Tokenizer or StreamingDecoder.
+// zero-value [Tokenizer] or [StreamingDecoder].
 var ErrClosed = errors.New("splintr: tokenizer is closed")
 
 // EncodeSpecialMode controls recognition of special-token spellings.
@@ -90,7 +90,7 @@ type tokenizerState struct {
 //
 // Tokenizer values may be copied: copies share ownership and closing one makes
 // every copy closed. Methods may be called concurrently with each other and
-// with Close; Close waits for calls already in progress.
+// with [Tokenizer.Close]; Close waits for calls already in progress.
 type Tokenizer struct {
 	state *tokenizerState
 }
@@ -112,7 +112,7 @@ func FromBytes(data []byte) (*Tokenizer, error) {
 	return finishTokenizer(ptr, status, nativeErr)
 }
 
-// FromFile reads and loads a Hugging Face tokenizer.json file.
+// FromFile reads a local tokenizer.json file and loads it with [FromBytes].
 func FromFile(path string) (*Tokenizer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -122,6 +122,7 @@ func FromFile(path string) (*Tokenizer, error) {
 }
 
 // FromPretrained loads a bundled vocabulary by name or alias, without downloads.
+// Available vocabularies depend on the native library's compiled features.
 func FromPretrained(name string) (*Tokenizer, error) {
 	var ptr *C.SplintrTokenizer
 	var nativeErr *C.SplintrError
@@ -189,14 +190,14 @@ func (t *Tokenizer) Close() error {
 	return nil
 }
 
-// Encode recognizes all configured special tokens and applies post-processing,
+// Encode encodes text with [SpecialAll] and applies post-processing,
 // which may insert special IDs even for empty text.
 func (t *Tokenizer) Encode(text string) ([]uint32, error) {
 	return t.EncodeWithSpecialMode(text, SpecialAll)
 }
 
-// EncodeWithSpecialMode encodes text with explicit special-token recognition.
-// The tokenizer.json single-sequence post-processor is applied in both modes.
+// EncodeWithSpecialMode controls special-token recognition; use [SpecialOrdinary] for untrusted text.
+// Both modes apply the tokenizer.json single-sequence post-processor.
 func (t *Tokenizer) EncodeWithSpecialMode(text string, mode EncodeSpecialMode) ([]uint32, error) {
 	state, ptr, err := t.lock()
 	if err != nil {
@@ -226,7 +227,7 @@ func (t *Tokenizer) EncodeWithSpecialMode(text string, mode EncodeSpecialMode) (
 	return ids, nil
 }
 
-// Decode decodes IDs while skipping declared special tokens. It follows
+// Decode decodes IDs with [DecodeSkipSpecial]. It follows
 // splintr's behavior for unknown IDs: declared decoder pipelines may omit
 // them, while other decoding paths return an error.
 func (t *Tokenizer) Decode(ids []uint32) (string, error) {
@@ -272,7 +273,7 @@ type StreamingDecoder struct {
 	state *streamingDecoderState
 }
 
-// StreamingDecoder creates a decoder that skips specials and outlives its tokenizer.
+// StreamingDecoder creates a decoder with [DecodeSkipSpecial] that outlives its tokenizer.
 func (t *Tokenizer) StreamingDecoder() (*StreamingDecoder, error) {
 	return t.StreamingDecoderWithSpecialMode(DecodeSkipSpecial)
 }
@@ -368,7 +369,7 @@ func (d *StreamingDecoder) AddTokenLossy(id uint32) (string, error) {
 	return d.AddTokensLossy([]uint32{id})
 }
 
-// AddTokensLossy is AddTokens with unknown IDs skipped.
+// AddTokensLossy is [StreamingDecoder.AddTokens] with unknown IDs skipped.
 func (d *StreamingDecoder) AddTokensLossy(ids []uint32) (string, error) {
 	return d.addTokens(ids, true)
 }
@@ -390,7 +391,8 @@ func (d *StreamingDecoder) addTokens(ids []uint32, lossy bool) (string, error) {
 	return streamingBytes(out, status, nativeErr)
 }
 
-// Flush drains buffered text, replacing incomplete UTF-8. It neither resets nor closes the decoder.
+// Flush drains buffered text, replacing incomplete UTF-8 with U+FFFD.
+// It neither resets nor closes the decoder; use [StreamingDecoder.Reset] for a new sequence.
 func (d *StreamingDecoder) Flush() (string, error) {
 	state, ptr, err := d.lock()
 	if err != nil {
@@ -465,7 +467,7 @@ func (d *StreamingDecoder) PendingBytes() (int, error) {
 }
 
 // EncodeBatch encodes texts in input order using splintr's native batch processing.
-// It has the same special-token and post-processing behavior as Encode. Empty
+// It has the same special-token and post-processing behavior as [Tokenizer.Encode]. Empty
 // batches return an empty slice; any error returns nil rather than partial results.
 func (t *Tokenizer) EncodeBatch(texts []string) ([][]uint32, error) {
 	state, ptr, err := t.lock()
@@ -516,7 +518,7 @@ func (t *Tokenizer) EncodeBatch(texts []string) ([][]uint32, error) {
 }
 
 // DecodeBatch decodes token lists in input order using splintr's native batch
-// processing. Special tokens and unknown IDs behave as in Decode. Empty batches
+// processing. Special tokens and unknown IDs behave as in [Tokenizer.Decode]. Empty batches
 // return an empty slice; any error returns nil rather than partial results.
 func (t *Tokenizer) DecodeBatch(tokenLists [][]uint32) ([]string, error) {
 	state, ptr, err := t.lock()
