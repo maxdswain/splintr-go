@@ -14,15 +14,12 @@ import (
 var canonicalPretrainedNames = []string{
 	"cl100k_base",
 	"o200k_base",
-	"llama3",
 	"deepseek_v3",
 	"qwen3",
 	"glm4",
 	"gpt-oss",
 	"phi4",
 	"olmo2",
-	"llama2",
-	"codellama",
 	"modernbert",
 	"gemma2",
 	"gemma3",
@@ -41,7 +38,7 @@ func TestBundledCanonicalPretrained(t *testing.T) {
 	const input = "Hello, tokenizer 123!"
 
 	// Deliberately run sequentially and close each tokenizer before loading the
-	// next: all 23 vocabularies are large when resident at the same time.
+	// next: all 20 vocabularies are large when resident at the same time.
 	for _, name := range canonicalPretrainedNames {
 		t.Run(name, func(t *testing.T) {
 			tok, err := splintr.FromPretrained(name)
@@ -144,17 +141,29 @@ func TestBundledKnownSamples(t *testing.T) {
 	}
 }
 
+func TestLlamaVocabulariesAreNotBundled(t *testing.T) {
+	for _, name := range []string{"llama3", "llama2", "codellama"} {
+		t.Run(name, func(t *testing.T) {
+			tok, err := splintr.FromPretrained(name)
+			if tok != nil {
+				_ = tok.Close()
+				t.Fatalf("FromPretrained(%q) returned a tokenizer", name)
+			}
+			if err == nil {
+				t.Fatalf("FromPretrained(%q) succeeded", name)
+			}
+		})
+	}
+}
+
 func TestBundledPretrainedAliases(t *testing.T) {
 	aliases := []string{
-		"llama3.1",
 		"deepseek-v3",
 		"qwen2.5",
 		"glm-4.5",
 		"gpt_oss",
 		"phi-4",
 		"olmo-2",
-		"tinyllama",
-		"code-llama",
 		"modern-bert",
 		"gemma-2",
 		"embeddinggemma",

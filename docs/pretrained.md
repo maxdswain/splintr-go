@@ -1,6 +1,6 @@
 # Bundled pretrained vocabularies
 
-`splintr.FromPretrained(name)` loads one of 23 bundled tokenizer variants offline. Builds with `NO_DEFAULT_FEATURES=1` omit them but retain JSON loading.
+`splintr.FromPretrained(name)` loads one of 20 bundled tokenizer variants offline. Llama vocabularies are not bundled. Builds with `NO_DEFAULT_FEATURES=1` omit all pretrained vocabularies but retain JSON loading.
 
 ## Names
 
@@ -10,15 +10,12 @@ Names and aliases are case-sensitive (splintr 0.21).
 | --- | --- | --- |
 | `cl100k_base` | OpenAI GPT-4 and GPT-3.5 Turbo | — |
 | `o200k_base` | OpenAI GPT-4o | — |
-| `llama3` | Meta Llama 3 | `llama3.1`, `llama3.2`, `llama3.3` |
 | `deepseek_v3` | DeepSeek V3/R1 | `deepseek-v3` |
 | `qwen3` | Qwen 2/3; Baichuan-M2 | `qwen`, `qwen2`, `qwen2.5`, `baichuan_m2` |
 | `glm4` | GLM-4/4.5 | `glm`, `glm-4`, `glm4.5`, `glm-4.5` |
 | `gpt-oss` | OpenAI gpt-oss | `gpt_oss`, `o200k_harmony` |
 | `phi4` | Microsoft Phi-4 and Phi-4-reasoning | `phi-4` |
 | `olmo2` | AI2 OLMo-2 | `olmo-2` |
-| `llama2` | Meta Llama 2 generation | `llama-2`, `tinyllama`, `vicuna` |
-| `codellama` | Code Llama | `code_llama`, `code-llama` |
 | `modernbert` | ModernBERT | `modern-bert` |
 | `gemma2` | Google Gemma 2 | `gemma-2` |
 | `gemma3` | Google Gemma 3 | `gemma-3`, `embeddinggemma` |

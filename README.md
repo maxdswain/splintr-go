@@ -1,6 +1,6 @@
 # splintr-go
 
-Go bindings for [splintr](https://github.com/ml-rust/splintr) through cgo. Default builds include all 23 bundled tokenizer variants; `FromPretrained` needs no downloads.
+Go bindings for [splintr](https://github.com/ml-rust/splintr) through cgo. Default builds include 20 bundled tokenizer variants; `FromPretrained` needs no downloads. Llama vocabularies are not bundled.
 
 ## Installation
 
@@ -31,7 +31,7 @@ import (
 
 func main() {
 	// Load a pretrained vocabulary (OpenAI GPT-4/3.5).
-	// Also: llama3, deepseek_v3, qwen3, glm4, gpt-oss.
+	// Also: deepseek_v3, qwen3, glm4, gpt-oss.
 	tok, err := splintr.FromPretrained("cl100k_base")
 	if err != nil {
 		log.Fatal(err)
@@ -140,5 +140,3 @@ make fmt-check lint # rustfmt, Clippy and Revive via golangci-lint v2
 ## License
 
 The Go bindings are licensed under [Apache 2.0](LICENSE). Bundled tokenizer vocabularies keep their original licenses, listed in [LICENSE-OTHERS](LICENSE-OTHERS).
-
-Llama 3 vocabulary attribution (required by Meta’s license): “Built with Llama”.

@@ -56,7 +56,7 @@ make release VERSION=v0.4.0       # build/release/*.tar.gz and checksums
 make test-release VERSION=v0.4.0  # rebuild, extract, run isolated consumer tests
 ```
 
-Archives contain `lib/libsplintr_go.a`, `lib/native-static-libs.txt`, `include/splintr.h`, and `share/licenses/splintr-go/`. All bundled vocabularies are included. Explicit cross-target builds require matching `GOOS`, `GOARCH`, `TARGET` and installed toolchains.
+Archives contain `lib/libsplintr_go.a`, `lib/native-static-libs.txt`, `include/splintr.h`, and `share/licenses/splintr-go/`. All supported non-Llama vocabularies are included. Explicit cross-target builds require matching `GOOS`, `GOARCH`, `TARGET` and installed toolchains.
 
 Pushes to `main` automatically release qualifying Conventional Commits using [git-cliff](https://git-cliff.org/):
 

@@ -68,14 +68,15 @@ licenses:
 	@set -eu; mkdir -p "$(ROOT)/build"; \
 	cargo metadata $(subst --target,--filter-platform,$(CARGO_FLAGS)) --format-version 1 >"$(ROOT)/build/dependencies.json"; \
 	rm -rf "$(LICENSES)"; mkdir -p "$(LICENSES)/packages"; \
-	cp "$(ROOT)/LICENSE" "$(ROOT)/NOTICE" "$(ROOT)/LICENSE-OTHERS" "$(LICENSES)/"; \
+	cp "$(ROOT)/LICENSE" "$(ROOT)/LICENSE-OTHERS" "$(LICENSES)/"; \
 	jq -c ". as \$$m | .packages[] \
 		| select(.id as \$$id | \$$m.resolve.nodes | any(.id == \$$id)) \
 		| select(.id as \$$id | \$$m.workspace_members | index(\$$id) | not) \
 		| {name, version, license, license_file, repository, source, manifest_path}" \
 		"$(ROOT)/build/dependencies.json" >"$(LICENSES)/packages.jsonl"; \
 	while IFS= read -r package; do \
-		dest="$(LICENSES)/packages/$$(printf '%s' "$$package" | jq -r '.name + "/" + .version')"; \
+		name=$$(printf '%s' "$$package" | jq -r '.name'); \
+		dest="$(LICENSES)/packages/$$name/$$(printf '%s' "$$package" | jq -r '.version')"; \
 		source=$$(printf '%s' "$$package" | jq -r '.manifest_path'); \
 		if command -v cygpath >/dev/null; then source=$$(cygpath -u "$$source"); fi; \
 		source=$$(dirname "$$source"); mkdir -p "$$dest"; \
@@ -96,6 +97,7 @@ licenses:
 		while IFS= read -r file; do \
 			rel=$${file#"$$source"/}; mkdir -p "$$dest/$$(dirname "$$rel")"; cp "$$file" "$$dest/$$rel"; \
 		done <"$$dest/files"; rm "$$dest/files"; \
+		if test "$$name" = splintr; then rm -f "$$dest/LICENSE-OTHERS"; fi; \
 		for file in "$$source"/README* "$$source"/AUTHOR*; do \
 			if test -f "$$file"; then cp "$$file" "$$dest/"; fi; \
 		done; \

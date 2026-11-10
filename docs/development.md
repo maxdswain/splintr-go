@@ -18,7 +18,7 @@ Go uses Revive with a 120-column limit; rustfmt uses `max_width = 120`. CI runs 
 
 ## Features
 
-All bundled vocabularies are enabled by default. For JSON-only or selected-vocabulary builds:
+All supported vocabularies except the Llama families are enabled by default. For JSON-only or selected-vocabulary builds:
 
 ```sh
 make test NO_DEFAULT_FEATURES=1
@@ -30,7 +30,7 @@ Splintr keeps small batches sequential and schedules larger batches on its share
 Rebuild the native library after updating the bindings. The `v0.1.0` archive lacks batch functions,
 and `v0.2.0` lacks streaming functions.
 
-Use the same feature settings when building, testing and installing. Releases always bundle every vocabulary. Full bundles increase binary size and carry additional license terms.
+Use the same feature settings when building, testing and installing. Releases bundle every supported non-Llama vocabulary. Full bundles increase binary size and carry additional license terms.
 
 Set `GOOS`, `GOARCH` and `TARGET` for cross-compilation, with matching Rust and C toolchains. For example, Linux arm64 uses `TARGET=aarch64-unknown-linux-gnu`.
 

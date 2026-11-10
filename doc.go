@@ -7,8 +7,8 @@
 //
 // # Getting started
 //
-// Default native builds include 23 vocabulary variants, including cl100k_base,
-// llama3, qwen3, and deepseek_v3. Loading a bundled vocabulary needs no downloads:
+// Default native builds include 20 non-Llama vocabulary variants, including
+// cl100k_base, qwen3, and deepseek_v3. Loading a bundled vocabulary needs no downloads:
 //
 //	tok, err := splintr.FromPretrained("cl100k_base")
 //	if err != nil {

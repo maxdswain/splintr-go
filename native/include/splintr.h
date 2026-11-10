@@ -77,7 +77,7 @@ uint32_t splintr_go_version_0_1_0(void);
 /*
  * Constructors return one owned handle. JSON/name must be non-empty.
  * JSON uses Hugging Face's tokenizer.json format. Pretrained names require
- * their vocabulary feature; the default build includes all vocabularies.
+ * their vocabulary feature; the default build includes supported non-Llama vocabularies.
  */
 SplintrStatus splintr_tokenizer_from_json(
     const uint8_t *json, size_t json_len,

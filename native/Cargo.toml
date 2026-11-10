@@ -12,10 +12,26 @@ crate-type = ["staticlib"]
 
 [features]
 # Bundled pretrained vocabularies are part of the normal binary distribution.
-# Use `--no-default-features` for a smaller source build that only supports
-# tokenizers supplied as JSON.
+# Llama vocabularies are intentionally excluded. Use `--no-default-features`
+# for a smaller source build that only supports tokenizers supplied as JSON.
 default = ["vocabs"]
-vocabs = ["splintr/vocabs"]
+vocabs = [
+    "splintr/vocab-cl100k",
+    "splintr/vocab-o200k",
+    "splintr/vocab-gpt-oss",
+    "splintr/vocab-phi4",
+    "splintr/vocab-olmo2",
+    "splintr/vocab-deepseek",
+    "splintr/vocab-qwen",
+    "splintr/vocab-glm",
+    "splintr/vocab-gemma2",
+    "splintr/vocab-gemma3",
+    "splintr/vocab-gemma4",
+    "splintr/vocab-kimi",
+    "splintr/vocab-mistral",
+    "splintr/vocab-modernbert",
+    "splintr/vocab-whisper",
+]
 
 [dependencies]
 splintr = { version = "=0.21.0", default-features = false, features = ["rayon"] }

@@ -226,7 +226,7 @@ jobs:
         run: |
           cat >> release-notes.md <<EOF
 
-          Native libraries for ${VERSION}, including all bundled vocabularies.
+          Native libraries for ${VERSION}, including all supported non-Llama vocabularies.
           Targets: Ubuntu 24.04 amd64/arm64, macOS 15 amd64/arm64, Windows amd64 MinGW-w64.
           Verify the accompanying SHA-256 checksum before extraction.
 
